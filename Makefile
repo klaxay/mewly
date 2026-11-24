@@ -11,7 +11,7 @@ run:
 	$(VENV_PYTHON) -m uvicorn server:app --ws-max-size 96000 --ws-max-queue 1
 
 run-offline:
-	TRANSCRIBER=dummy ASSISTANT=dummy $(MAKE) run
+	MEWLY_TRANSCRIBER=dummy MEWLY_ASSISTANT=dummy $(MAKE) run
 
 test:
 	$(VENV_PYTHON) -m pytest -q

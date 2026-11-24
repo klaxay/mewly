@@ -1,6 +1,7 @@
 """Serve the capture page and run one meeting loop per WebSocket."""
 
 from contextlib import AsyncExitStack, asynccontextmanager
+from functools import partial
 import logging
 import os
 from pathlib import Path
@@ -10,45 +11,61 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from openai import APIError, AsyncOpenAI
 
+from assist import DEFAULT_MODEL as DEFAULT_ASSISTANT_MODEL
 from assist import DummyAssistant, OpenAIAssistant
 from assist.window import TranscriptWindow
-from transcribe import CHUNK_BYTES, DummyTranscriber, OpenAIWhisperTranscriber
+from transcribe import DEFAULT_MODEL as DEFAULT_WHISPER_MODEL
+from transcribe import (
+    CHUNK_BYTES,
+    DEFAULT_WINDOW_SECONDS,
+    DummyTranscriber,
+    OpenAIWhisperTranscriber,
+)
 
 ROOT = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
 
 
-def mode(name: str) -> str:
+def mode(name: str, provider: str) -> str:
     value = os.getenv(name, "dummy")
-    if value not in {"dummy", "openai"}:
-        raise ValueError(f"{name} must be dummy or openai")
+    if value not in {"dummy", provider}:
+        raise ValueError(f"{name} must be dummy or {provider}")
     return value
 
 
-def api_key(name: str) -> str:
-    key = os.getenv(name) or os.getenv("OPENAI_API_KEY")
+def api_key(override: str | None = None) -> str:
+    key = (os.getenv(override) if override else None) or os.getenv("OPENAI_API_KEY")
     if not key:
-        raise ValueError(f"Set {name} or OPENAI_API_KEY for the selected adapter")
+        names = f"{override} or OPENAI_API_KEY" if override else "OPENAI_API_KEY"
+        raise ValueError(f"Set {names} for the selected adapter")
     return key
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_dotenv(ROOT / ".env")
-    app.state.transcriber = None
+    app.state.make_transcriber = DummyTranscriber
     app.state.assistant = DummyAssistant()
     app.state.meeting_context = os.getenv("MEETING_CONTEXT", "")
 
     # Reuse HTTP connections across chunks and close them on server shutdown.
     async with AsyncExitStack() as stack:
-        if mode("TRANSCRIBER") == "openai":
-            client = await stack.enter_async_context(AsyncOpenAI(
-                api_key=api_key("OPENAI_API_KEY"), timeout=8, max_retries=0,
+        if mode("MEWLY_TRANSCRIBER", "whisper") == "whisper":
+            window_seconds = int(os.getenv(
+                "WHISPER_WINDOW_SECONDS", str(DEFAULT_WINDOW_SECONDS)
             ))
-            app.state.transcriber = OpenAIWhisperTranscriber(
-                client, os.getenv("WHISPER_MODEL", "whisper-1")
+            if window_seconds < 1:
+                raise ValueError("WHISPER_WINDOW_SECONDS must be positive")
+            client = await stack.enter_async_context(AsyncOpenAI(
+                api_key=api_key(), timeout=8, max_retries=0,
+            ))
+            app.state.make_transcriber = partial(
+                OpenAIWhisperTranscriber,
+                client,
+                os.getenv("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
+                window_seconds,
             )
-        if mode("ASSISTANT") == "openai":
+        if mode("MEWLY_ASSISTANT", "openai") == "openai":
             client = await stack.enter_async_context(AsyncOpenAI(
                 api_key=api_key("ASSISTANT_API_KEY"),
                 base_url=os.getenv("ASSISTANT_BASE_URL") or None,
@@ -56,7 +73,7 @@ async def lifespan(app: FastAPI):
                 max_retries=0,
             ))
             app.state.assistant = OpenAIAssistant(
-                client, os.getenv("ASSISTANT_MODEL", "gpt-4o-mini")
+                client, os.getenv("ASSISTANT_MODEL", DEFAULT_ASSISTANT_MODEL)
             )
         yield
 
@@ -76,7 +93,7 @@ async def meeting(socket: WebSocket) -> None:
     await socket.accept()
     window = TranscriptWindow()
     state = socket.app.state
-    transcriber = state.transcriber or DummyTranscriber()
+    transcriber = state.make_transcriber()
     try:
         while True:
             message = await socket.receive()
