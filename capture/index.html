@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mewly · Live meeting copilot</title>
+  <style>
+    body { font: 1rem/1.55 system-ui, sans-serif; max-width: 42rem; margin: 3rem auto; padding: 0 1rem; }
+    button { font: inherit; margin-right: .5rem; }
+    #transcript { max-height: 24rem; overflow: auto; }
+  </style>
+  <script type="module" src="/capture.js"></script>
+</head>
+<body>
+  <main>
+    <h1>mewly</h1>
+    <button id="start" type="button">Start microphone</button>
+    <button id="stop" type="button" disabled>Stop</button>
+    <p id="status" role="status">Microphone off.</p>
+
+    <h2>Current suggestion</h2>
+    <p id="suggestion" aria-live="polite">Waiting for audio.</p>
+
+    <h2>Live transcript</h2>
+    <ul id="transcript" role="log" aria-label="Live transcript"></ul>
+  </main>
+</body>
+</html>
